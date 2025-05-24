@@ -162,6 +162,24 @@
             overflow-y: auto;
         }
 
+        .daemon-status {
+            padding: 10px;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+
+        .daemon-healthy {
+            background: #e8f5e8;
+            color: #2e7d32;
+            border: 1px solid #4caf50;
+        }
+
+        .daemon-unhealthy {
+            background: #ffebee;
+            color: #c62828;
+            border: 1px solid #f44336;
+        }
+
         @media (max-width: 768px) {
             .dashboard {
                 grid-template-columns: 1fr;
@@ -202,6 +220,16 @@
                 </div>
             </div>
 
+            <!-- Daemon Status Card -->
+            <div class="card">
+                <div class="card-title">
+                    🤖 Daemon Status
+                </div>
+                <div id="daemon-content">
+                    <div class="loading">Loading daemon status...</div>
+                </div>
+            </div>
+
             <!-- System Metrics Card -->
             <div class="card">
                 <div class="card-title">
@@ -209,16 +237,6 @@
                 </div>
                 <div id="metrics-content">
                     <div class="loading">Loading system metrics...</div>
-                </div>
-            </div>
-
-            <!-- Service Information Card -->
-            <div class="card">
-                <div class="card-title">
-                    ⚙️ Service Information
-                </div>
-                <div id="service-content">
-                    <div class="loading">Loading service info...</div>
                 </div>
             </div>
         </div>
@@ -295,9 +313,12 @@
                 indicator.className = `status-indicator status-${data.status}`;
                 
                 document.getElementById('health-content').innerHTML = `
-                    ${createMetric('Status', data.status.toUpperCase())}
+                    ${createMetric('Overall Status', data.status.toUpperCase())}
                     ${createMetric('Healthy', data.healthy ? '✅ Yes' : '❌ No')}
+                    ${createMetric('Database', data.database ? '✅ Connected' : '❌ Disconnected')}
+                    ${createMetric('Daemon', data.daemon ? '✅ Running' : '❌ Issues')}
                     ${createMetric('Timestamp', new Date(data.timestamp).toLocaleString())}
+                    ${data.error ? `<div class="error">Error: ${data.error.message}</div>` : ''}
                 `;
             } catch (error) {
                 displayError('health-content', error);
@@ -312,44 +333,69 @@
                 const data = await response.json();
                 
                 // Database status
-                const dbConnected = data.database?.connected;
+                const database = data.database || {};
                 document.getElementById('database-content').innerHTML = `
-                    ${createMetric('Connection', dbConnected ? '✅ Connected' : '❌ Disconnected')}
+                    ${createMetric('Total Spaces', database.totalSpaces || 0)}
+                    ${createMetric('Live Spaces', database.liveSpaces || 0)}
+                    ${createMetric('Ended Spaces', database.endedSpaces || 0)}
+                    ${createMetric('Avg Participants', database.averageParticipants || 0)}
                     ${createMetric('Environment', data.system?.environment || 'Unknown')}
-                    ${createMetric('Collections', data.database?.collections ? Object.keys(data.database.collections).length : 'N/A')}
-                    ${createMetric('Last Health Check', data.activity?.lastHealthCheck ? new Date(data.activity.lastHealthCheck).toLocaleString() : 'Never')}
+                `;
+                
+                // Daemon status
+                const daemon = data.daemon || {};
+                const daemonHealthy = daemon.healthy;
+                const daemonClass = daemonHealthy ? 'daemon-healthy' : 'daemon-unhealthy';
+                
+                let daemonContent = `
+                    ${createMetric('Status', daemonHealthy ? '✅ Healthy' : '❌ Issues')}
+                `;
+                
+                if (daemon.lastScan) {
+                    daemonContent += createMetric('Last Scan', new Date(daemon.lastScan).toLocaleString());
+                } else {
+                    daemonContent += createMetric('Last Scan', '❌ Never');
+                }
+                
+                if (daemon.scanAgeMinutes !== null && daemon.scanAgeMinutes !== undefined) {
+                    daemonContent += createMetric('Scan Age', `${daemon.scanAgeMinutes} minutes ago`);
+                }
+                
+                daemonContent += createMetric('Expected Interval', daemon.expectedScanInterval || '5 minutes');
+                
+                document.getElementById('daemon-content').innerHTML = `
+                    <div class="daemon-status ${daemonClass}">
+                        ${daemonHealthy ? '🟢 Daemon is working properly' : '🔴 Daemon has issues - scans may be stale'}
+                    </div>
+                    ${daemonContent}
                 `;
                 
                 // System metrics
                 const memory = data.system?.memoryUsage;
+                const activity = data.activity || {};
+                
                 document.getElementById('metrics-content').innerHTML = `
                     ${createMetric('Uptime', formatUptime(data.system?.uptime || 0))}
                     ${createMetric('Memory (RSS)', memory ? formatBytes(memory.rss) : 'N/A')}
                     ${createMetric('Memory (Heap Used)', memory ? formatBytes(memory.heapUsed) : 'N/A')}
                     ${createMetric('Memory (Heap Total)', memory ? formatBytes(memory.heapTotal) : 'N/A')}
-                    ${createMetric('Scan Frequency', data.activity?.scanFrequency || 'Unknown')}
+                    ${createMetric('Scan Frequency', activity.scanFrequency || 'Unknown')}
+                    ${createMetric('Activity (24h)', activity.last24Hours || 0)}
+                    ${createMetric('Activity (1h)', activity.lastHour || 0)}
                 `;
                 
             } catch (error) {
                 displayError('database-content', error);
+                displayError('daemon-content', error);
                 displayError('metrics-content', error);
             }
         }
 
-        // Fetch and display service status
+        // Fetch and display detailed status
         async function fetchStatus() {
             try {
                 const response = await fetch(`${API_BASE}/status`);
                 const data = await response.json();
-                
-                document.getElementById('service-content').innerHTML = `
-                    ${createMetric('Service Name', data.service?.name || 'Unknown')}
-                    ${createMetric('Version', data.service?.version || 'Unknown')}
-                    ${createMetric('Environment', data.service?.environment || 'Unknown')}
-                    ${createMetric('Platform', data.service?.platform || 'Unknown')}
-                    ${createMetric('Node Version', data.service?.nodeVersion || 'Unknown')}
-                    ${createMetric('Process ID', data.service?.pid || 'Unknown')}
-                `;
                 
                 // Display raw data
                 document.getElementById('raw-data').innerHTML = `
@@ -357,7 +403,6 @@
                 `;
                 
             } catch (error) {
-                displayError('service-content', error);
                 displayError('raw-data', error);
             }
         }
